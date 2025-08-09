@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Math Quiz Canvas Game</title>
+<style>
+  body {
+    margin: 0;
+    background: #222;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    user-select: none;
+  }
+  canvas {
+    background: #f0f4f8;
+    border-radius: 12px;
+    box-shadow: 0 0 25px rgba(0, 0, 0, 0.6);
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="520"></canvas>
+
+<script>
+// Audio context & sounds
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audioCtx = new AudioCtx();
+
+function playTone(freq, duration=0.15, type='sine', volume=0.15) {
+  const osc = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gainNode.gain.value = volume;
+  osc.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+  osc.onended = () => { osc.disconnect(); gainNode.disconnect(); };
+}
+
+// Button helper class
+class Button {
+  constructor(x, y, w, h, text, baseColor='#2196F3', hoverColor='#42A5F5', textColor='#fff') {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.text = text;
+    this.baseColor = baseColor;
+    this.hoverColor = hoverColor;
+    this.textColor = textColor;
+    this.hovered = false;
+    this.animScale = 1;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x + this.w/2, this.y + this.h/2);
+    ctx.scale(this.animScale, this.animScale);
+
+    ctx.fillStyle = this.hovered ? this.hoverColor : this.baseColor;
+    ctx.shadowColor = this.hovered ? 'rgba(66,165,245,0.7)' : 'transparent';
+    ctx.shadowBlur = this.hovered ? 12 : 0;
+    ctx.strokeStyle = '#1565C0';
+    ctx.lineWidth = 3;
+    ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h);
+    ctx.strokeRect(-this.w/2, -this.h/2, this.w, this.h);
+
+    ctx.fillStyle = this.textColor;
+    ctx.font = '28px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(this.text, 0, 0);
+
+    ctx.restore();
+  }
+
+  isInside(px, py) {
+    return px >= this.x && px <= this.x + this.w && py >= this.y && py <= this.y + this.h;
+  }
+
+  animateClick() {
+    this.animScale = 0.85;
+    setTimeout(() => { this.animScale = 1; }, 150);
+  }
+}
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let gameState = 'menu';
+let score = 0;
+let question = '';
+let answers = [];
+let correctAnswer;
+let selectedMode = '+';
+let level = 1;
+let questionCount = 0;
+let timer = 10;
+let timerInterval;
+
+const levels = 10;
+const questionsPerLevel = 20;
+
+const modes = ['+', '-', '×', '÷'];
+
+// Buttons
+const buttons = {
+  start: new Button(300, 380, 200, 70, 'Start'),
+  quit: new Button(0, 0, 80, 40, 'Quit', '#e53935', '#ef5350'),
+  modeSelectors: modes.map((m,i) => new Button(150 + i*120, 250, 80, 80, m))
+};
+
+function drawMenu() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle = '#1976D2';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '48px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Math Quiz Game', canvas.width/2, 100);
+
+  ctx.font = '22px Arial';
+  ctx.fillText('Select Mode', canvas.width/2, 210);
+
+  buttons.modeSelectors.forEach(btn => {
+    btn.baseColor = (btn.text === selectedMode) ? '#fdd835' : '#1976D2';
+    btn.hoverColor = (btn.text === selectedMode) ? '#fff176' : '#42A5F5';
+    btn.textColor = (btn.text === selectedMode) ? '#000' : '#fff';
+    btn.draw(ctx);
+  });
+
+  buttons.start.draw(ctx);
+}
+
+function generateQuestion() {
+  let maxNum = level * 10;
+  let a = Math.floor(Math.random()*maxNum) + 1;
+  let b = Math.floor(Math.random()*maxNum) + 1;
+  switch(selectedMode) {
+    case '+': correctAnswer = a + b; question = `${a} + ${b}`; break;
+    case '-': correctAnswer = a - b; question = `${a} - ${b}`; break;
+    case '×': correctAnswer = a * b; question = `${a} × ${b}`; break;
+    case '÷':
+      b = Math.max(1, b);
+      a = b * (Math.floor(Math.random()*maxNum) + 1);
+      correctAnswer = a / b;
+      correctAnswer = Math.round(correctAnswer * 100) / 100;
+      question = `${a} ÷ ${b}`;
+      break;
+  }
+  answers = [correctAnswer];
+  while (answers.length < 4) {
+    let wrong = correctAnswer + Math.floor(Math.random()*10) - 5;
+    if (selectedMode === '÷') {
+      wrong = Math.round((correctAnswer + Math.random()*4 - 2)*100)/100;
+    }
+    if (!answers.includes(wrong)) answers.push(wrong);
+  }
+  answers.sort(() => Math.random()-0.5);
+}
+
+function startLevel() {
+  score = 0;
+  questionCount = 0;
+  timer = 10;
+  gameState = 'playing';
+  generateQuestion();
+  startTimer();
+}
+
+function startTimer() {
+  clearInterval(timerInterval);
+  timer = 10;
+  timerInterval = setInterval(() => {
+    timer--;
+    if(timer <= 0) {
+      nextQuestion(false);
+    }
+    drawGame();
+  }, 1000);
+}
+
+function nextQuestion(isCorrect) {
+  if(isCorrect) {
+    playTone(880, 0.15, 'triangle', 0.2); // correct answer sound
+    score++;
+  } else {
+    playTone(220, 0.3, 'square', 0.3); // wrong or timeout sound
+    score = Math.max(0, score - 1);
+  }
+  questionCount++;
+  if(questionCount >= questionsPerLevel) {
+    level++;
+    if(level > levels) {
+      gameState = 'finished';
+      clearInterval(timerInterval);
+      drawFinished();
+      return;
+    }
+    gameState = 'levelup';
+    clearInterval(timerInterval);
+    drawLevelUp();
+    return;
+  }
+  timer = 10;
+  generateQuestion();
+}
+
+function drawGame() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#e3f2fd';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // Info top bar
+  ctx.fillStyle = '#000';
+  ctx.font = '24px Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Level: ${level} / ${levels}`, 20, 35);
+  ctx.fillText(`Score: ${score}`, 180, 35);
+  ctx.fillText(`Question: ${questionCount+1} / ${questionsPerLevel}`, 320, 35);
+
+  // Timer Circle
+  const centerX = 720, centerY = 35, radius = 25;
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#1976D2';
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+  ctx.stroke();
+  ctx.strokeStyle = timer > 3 ? '#43a047' : '#e53935'; // green if safe, red if low time
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, radius, -Math.PI/2, (-Math.PI/2) + (timer/10) * 2 * Math.PI, false);
+  ctx.stroke();
+  ctx.font = '22px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#000';
+  ctx.fillText(timer, centerX, centerY + 8);
+
+  // Question
+  ctx.font = '48px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#000';
+  ctx.fillText(question, canvas.width/2, 150);
+
+  // Answers
+  ctx.font = '28px Arial';
+  answers.forEach((ans, i) => {
+    const x = 150;
+    const y = 220 + i*70;
+    const w = 500;
+    const h = 55;
+
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = 'rgba(0,0,0,0.2)';
+    ctx.shadowBlur = 5;
+    ctx.fillRect(x, y, w, h);
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#000';
+    ctx.textAlign = 'center';
+    ctx.fillText(ans, x + w/2, y + h/2 + 7);
+  });
+
+  // Quit button bottom-right
+  buttons.quit.x = canvas.width - buttons.quit.w - 20;
+  buttons.quit.y = canvas.height - buttons.quit.h - 20;
+  buttons.quit.draw(ctx);
+}
+
+function drawFinished() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = '40px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('🎉 Congratulations! 🎉', canvas.width/2, 180);
+  ctx.font = '30px Arial';
+  ctx.fillText(`You completed all ${levels} levels!`, canvas.width/2, 240);
+  ctx.fillText(`Final Score: ${score}`, canvas.width/2, 300);
+  ctx.font = '20px Arial';
+  ctx.fillText('Refresh page to play again.', canvas.width/2, 370);
+}
+
+function drawLevelUp() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#4caf50';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = '48px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Level ${level-1} Complete!`, canvas.width/2, 180);
+  ctx.font = '30px Arial';
+  ctx.fillText(`Next Level: ${level}`, canvas.width/2, 250);
+  ctx.font = '24px Arial';
+  ctx.fillText('Press Space or Click Start to Continue', canvas.width/2, 340);
+
+  buttons.start.x = canvas.width/2 - 100;
+  buttons.start.y = 380;
+  buttons.start.draw(ctx);
+}
+
+// Handle mouse/touch interaction
+function handleInput(x, y) {
+  if(gameState === 'menu') {
+    // Check mode buttons
+    for(let btn of buttons.modeSelectors) {
+      if(btn.isInside(x,y)) {
+        selectedMode = btn.text;
+        playTone(600, 0.1, 'square');
+        drawMenu();
+        return;
+      }
+    }
+    // Check start button
+    if(buttons.start.isInside(x,y)) {
+      buttons.start.animateClick();
+      playTone(880, 0.15, 'triangle');
+      startLevel();
+      return;
+    }
+  }
+  else if(gameState === 'playing') {
+    // Check answers
+    for(let i=0; i<answers.length; i++) {
+      const x0=150, y0=220+i*70, w=500, h=55;
+      if(x>=x0 && x<=x0+w && y>=y0 && y<=y0+h) {
+        buttons.quit.animScale = 1;
+        if(answers[i] === correctAnswer) {
+          playTone(880, 0.15, 'triangle', 0.3);
+          nextQuestion(true);
+        } else {
+          playTone(220, 0.3, 'square', 0.3);
+          nextQuestion(false);
+        }
+        return;
+      }
+    }
+    // Check quit button
+    if(buttons.quit.isInside(x,y)) {
+      buttons.quit.animateClick();
+      playTone(440, 0.15, 'sine');
+      clearInterval(timerInterval);
+      gameState = 'menu';
+      drawMenu();
+      return;
+    }
+  }
+  else if(gameState === 'levelup') {
+    // Check start button to continue level
+    if(buttons.start.isInside(x,y)) {
+      buttons.start.animateClick();
+      playTone(880, 0.15, 'triangle');
+      startLevel();
+      return;
+    }
+  }
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  let rect = canvas.getBoundingClientRect();
+  let mx = e.clientX - rect.left;
+  let my = e.clientY - rect.top;
+  let hovered = false;
+
+  if(gameState === 'menu') {
+    buttons.modeSelectors.forEach(btn => {
+      btn.hovered = btn.isInside(mx,my);
+      if(btn.hovered) hovered = true;
+    });
+    buttons.start.hovered = buttons.start.isInside(mx,my);
+    if(buttons.start.hovered) hovered = true;
+  } else if(gameState === 'playing') {
+    buttons.quit.hovered = buttons.quit.isInside(mx,my);
+    if(buttons.quit.hovered) hovered = true;
+  } else if(gameState === 'levelup') {
+    buttons.start.hovered = buttons.start.isInside(mx,my);
+    if(buttons.start.hovered) hovered = true;
+  }
+
+  if(hovered) canvas.style.cursor = 'pointer';
+  else canvas.style.cursor = 'default';
+});
+
+canvas.addEventListener('click', (e) => {
+  let rect = canvas.getBoundingClientRect();
+  let mx = e.clientX - rect.left;
+  let my = e.clientY - rect.top;
+  handleInput(mx,my);
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  let rect = canvas.getBoundingClientRect();
+  let touch = e.touches[0];
+  let mx = touch.clientX - rect.left;
+  let my = touch.clientY - rect.top;
+  handleInput(mx,my);
+});
+
+document.addEventListener('keydown', (e) => {
+  if(gameState === 'playing' && e.key.toLowerCase() === 'q') {
+    clearInterval(timerInterval);
+    gameState = 'menu';
+    drawMenu();
+  }
+  if(gameState === 'levelup' && (e.code === 'Space' || e.key.toLowerCase() === 'enter')) {
+    startLevel();
+  }
+});
+
+function loop() {
+  if(gameState === 'menu') drawMenu();
+  else if(gameState === 'playing') drawGame();
+  else if(gameState === 'finished') drawFinished();
+  else if(gameState === 'levelup') drawLevelUp();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
